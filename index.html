@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Espectro FFT Interactivo</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root {
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --bg-card: #ffffff;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+        }
+
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg-card: #1e293b;
+                --text-main: #f1f5f9;
+                --text-muted: #94a3b8;
+                --border: #334155;
+            }
+            body { background-color: #0f172a; }
+        }
+
+        body {
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            color: var(--text-main);
+            transition: background-color 0.3s ease;
+        }
+
+        .glass-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 1rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+
+        /* Estilos personalizados para los sliders */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+
+        input[type=range]:focus { outline: none; }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 6px;
+            cursor: pointer;
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            height: 18px;
+            width: 18px;
+            border-radius: 50%;
+            background: var(--primary);
+            cursor: pointer;
+            -webkit-appearance: none;
+            margin-top: -6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+            transition: transform 0.1s ease;
+        }
+
+        input[type=range]:active::-webkit-slider-thumb {
+            transform: scale(1.2);
+            background: var(--primary-hover);
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 2px 8px;
+            border-radius: 9999px;
+            font-size: 11px;
+            font-weight: 600;
+            background: rgba(99, 102, 241, 0.1);
+            color: var(--primary);
+            border: 1px solid rgba(99, 102, 241, 0.2);
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 flex justify-center items-center min-h-screen">
+
+    <div class="glass-card w-full max-w-4xl p-6 md:p-8 space-y-8">
+        <!-- Header -->
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+                <h1 class="text-2xl font-bold tracking-tight">Análisis de Vibración MPU6050</h1>
+                <p class="text-sm text-slate-500 mt-1" style="color: var(--text-muted);">Transformada Rápida de Fourier (FFT) en tiempo real</p>
+            </div>
+            <div class="flex gap-2">
+                <span class="status-badge" id="badge-fs">Fs: 1000 Hz</span>
+                <span class="status-badge" id="badge-n">N: 512 pts</span>
+            </div>
+        </div>
+
+        <!-- Controles -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="space-y-3">
+                <div class="flex justify-between items-center">
+                    <label class="text-sm font-medium" style="color: var(--text-muted);">Frecuencia Fundamental</label>
+                    <span id="lb-f0" class="text-sm font-bold text-indigo-500">50 Hz</span>
+                </div>
+                <input type="range" id="f0" min="5" max="200" step="1" value="50">
+            </div>
+
+            <div class="space-y-3">
+                <div class="flex justify-between items-center">
+                    <label class="text-sm font-medium" style="color: var(--text-muted);">Amplitud 2° Armónico</label>
+                    <span id="lb-h2" class="text-sm font-bold text-indigo-500">0.40</span>
+                </div>
+                <input type="range" id="h2" min="0" max="1" step="0.05" value="0.4">
+            </div>
+
+            <div class="space-y-3">
+                <div class="flex justify-between items-center">
+                    <label class="text-sm font-medium" style="color: var(--text-muted);">Amplitud 3° Armónico</label>
+                    <span id="lb-h3" class="text-sm font-bold text-indigo-500">0.20</span>
+                </div>
+                <input type="range" id="h3" min="0" max="1" step="0.05" value="0.2">
+            </div>
+        </div>
+
+        <!-- Visualización -->
+        <div class="relative w-full h-[300px] rounded-xl border overflow-hidden bg-slate-50 dark:bg-slate-900/50" style="border-color: var(--border);">
+            <canvas id="fftCanvas" class="w-full h-full"></canvas>
+        </div>
+
+        <!-- Footer / Info -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-4 border-t text-xs font-medium" style="border-color: var(--border); color: var(--text-muted);">
+            <div class="flex items-center gap-2">
+                <div class="w-2 h-2 rounded-full bg-indigo-500"></div>
+                <span id="dom-freq">Frecuencia dominante: —</span>
+            </div>
+            <div class="flex items-center gap-2 md:justify-end">
+                <span id="res-info">Resolución Δf: —</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const fftCv = document.getElementById('fftCanvas');
+        const fftCtx = fftCv.getContext('2d');
+        const FS = 1000, N_FFT = 512;
+
+        function isDark() {
+            return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        }
+
+        // Fórmulas originales intactas (FFT Cooley-Tukey)
+        function fft(re, im) {
+            const n = re.length;
+            if (n <= 1) return;
+            const rer = [], rei = [], ior = [], ioi = [];
+            for (let i = 0; i < n; i += 2) { rer.push(re[i]); rei.push(im[i]); }
+            for (let i = 1; i < n; i += 2) { ior.push(re[i]); ioi.push(im[i]); }
+            fft(rer, rei); fft(ior, ioi);
+            for (let k = 0; k < n / 2; k++) {
+                const theta = -2 * Math.PI * k / n;
+                const cr = Math.cos(theta), ci = Math.sin(theta);
+                const tr = cr * ior[k] - ci * ioi[k];
+                const ti = cr * ioi[k] + ci * ior[k];
+                re[k] = rer[k] + tr; im[k] = rei[k] + ti;
+                re[k + n/2] = rer[k] - tr; im[k + n/2] = rei[k] - ti;
+            }
+        }
+
+        function drawFFT() {
+            const f0 = parseInt(document.getElementById('f0').value);
+            const a2 = parseFloat(document.getElementById('h2').value);
+            const a3 = parseFloat(document.getElementById('h3').value);
+            
+            // Actualizar etiquetas UI
+            document.getElementById('lb-f0').textContent = f0 + ' Hz';
+            document.getElementById('lb-h2').textContent = a2.toFixed(2);
+            document.getElementById('lb-h3').textContent = a3.toFixed(2);
+
+            const re = new Array(N_FFT).fill(0);
+            const im = new Array(N_FFT).fill(0);
+            for (let i = 0; i < N_FFT; i++) {
+                const t = i / FS;
+                re[i] = Math.sin(2 * Math.PI * f0 * t)
+                       + a2 * Math.sin(2 * Math.PI * 2 * f0 * t)
+                       + a3 * Math.sin(2 * Math.PI * 3 * f0 * t)
+                       + 0.05 * (Math.random() - 0.5);
+            }
+            fft(re, im);
+
+            const mag = [];
+            for (let k = 0; k < N_FFT / 2; k++) {
+                mag.push(2 * Math.sqrt(re[k]*re[k] + im[k]*im[k]) / N_FFT);
+            }
+
+            const dpr = window.devicePixelRatio || 1;
+            const container = fftCv.parentElement;
+            const W = container.clientWidth;
+            const H = container.clientHeight;
+            
+            fftCv.width = W * dpr; 
+            fftCv.height = H * dpr;
+            fftCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            fftCtx.clearRect(0, 0, W, H);
+
+            const dark = isDark();
+            const pad = { l: 48, r: 24, t: 30, b: 40 };
+            const pw = W - pad.l - pad.r;
+            const ph = H - pad.t - pad.b;
+            const maxMag = Math.max(...mag, 0.1);
+            const maxFreq = FS / 2;
+
+            // Dibujar Grilla Refinada
+            fftCtx.strokeStyle = dark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)';
+            fftCtx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = pad.t + ph * i / 4;
+                fftCtx.beginPath(); fftCtx.moveTo(pad.l, y); fftCtx.lineTo(pad.l + pw, y); fftCtx.stroke();
+            }
+
+            // Etiquetas Eje Y
+            fftCtx.fillStyle = dark ? '#94a3b8' : '#64748b';
+            fftCtx.font = '500 10px Inter';
+            fftCtx.textAlign = 'right';
+            for (let i = 0; i <= 4; i++) {
+                const val = (maxMag * (4 - i) / 4).toFixed(2);
+                fftCtx.fillText(val, pad.l - 10, pad.t + ph * i / 4 + 4);
+            }
+
+            // Etiquetas Eje X
+            fftCtx.textAlign = 'center';
+            const freqMarks = [0, 100, 200, 300, 400, 500];
+            for (const f of freqMarks) {
+                if (f > maxFreq) continue;
+                const x = pad.l + (f / maxFreq) * pw;
+                fftCtx.fillText(f + ' Hz', x, pad.t + ph + 24);
+                
+                // Línea vertical sutil
+                fftCtx.strokeStyle = dark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.03)';
+                fftCtx.beginPath(); fftCtx.moveTo(x, pad.t); fftCtx.lineTo(x, pad.t + ph); fftCtx.stroke();
+            }
+
+            // Dibujar Barras del Espectro
+            const binW = pw / (N_FFT / 2);
+            const highlights = [f0, 2*f0, 3*f0].filter(f => f <= maxFreq);
+            
+            for (let k = 0; k < N_FFT / 2; k++) {
+                const freqK = k * FS / N_FFT;
+                const x = pad.l + (freqK / maxFreq) * pw;
+                const barH = (mag[k] / maxMag) * ph;
+                
+                // Detección de picos para resaltado
+                const isHighlight = highlights.some(f => Math.abs(freqK - f) < (FS / N_FFT) * 1.2);
+                
+                if (isHighlight) {
+                    // Gradiente para picos
+                    const grad = fftCtx.createLinearGradient(0, pad.t + ph - barH, 0, pad.t + ph);
+                    grad.addColorStop(0, '#818cf8');
+                    grad.addColorStop(1, '#4f46e5');
+                    fftCtx.fillStyle = grad;
+                } else {
+                    fftCtx.fillStyle = dark ? 'rgba(99, 102, 241, 0.2)' : 'rgba(99, 102, 241, 0.15)';
+                }
+                
+                // Dibujar con bordes redondeados en la parte superior
+                const finalBarH = Math.max(barH, 1);
+                const barX = x;
+                const barY = pad.t + ph - finalBarH;
+                const width = Math.max(binW - 1, 1);
+                
+                fftCtx.fillRect(barX, barY, width, finalBarH);
+            }
+
+            // Info de la frecuencia dominante
+            let domK = 0, domMag = 0;
+            for (let k = 1; k < N_FFT / 2; k++) { 
+                if (mag[k] > domMag) { domMag = mag[k]; domK = k; } 
+            }
+            const domFreq = (domK * FS / N_FFT).toFixed(1);
+            const df = (FS / N_FFT).toFixed(2);
+            
+            document.getElementById('dom-freq').textContent = `Frecuencia dominante: ${domFreq} Hz`;
+            document.getElementById('res-info').textContent = `Resolución Δf = ${df} Hz`;
+        }
+
+        // Event Listeners
+        ['f0', 'h2', 'h3'].forEach(id => {
+            document.getElementById(id).addEventListener('input', drawFFT);
+        });
+        
+        window.addEventListener('resize', drawFFT);
+        
+        // Iniciar
+        window.onload = drawFFT;
+    </script>
+</body>
+</html>
